@@ -1,0 +1,26 @@
+name: lieder_lernapp_englisch
+description: App zum Lernen englischer Liedtexte
+publish_to: "none"
+
+version: 1.0.0+1
+
+environment:
+  sdk: ">=3.8.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  cupertino_icons: ^1.0.8
+  file_picker: ^10.3.2
+  flutter_tts: ^4.2.3
+  syncfusion_flutter_pdf: ^30.1.42
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
