@@ -5,6 +5,8 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_tts/flutter_tts.dart';
+import 'package:speech_to_text/speech_recognition_result.dart';
+import 'package:speech_to_text/speech_to_text.dart';
 import 'package:syncfusion_flutter_pdf/pdf.dart';
 
 void main() {
@@ -50,6 +52,7 @@ class SongTrainerPage extends StatefulWidget {
 
 class _SongTrainerPageState extends State<SongTrainerPage> {
   final FlutterTts _flutterTts = FlutterTts();
+  final SpeechToText _speechToText = SpeechToText();
   final TextEditingController _textController = TextEditingController();
   final ScrollController _lineScrollController = ScrollController();
 
@@ -74,6 +77,12 @@ class _SongTrainerPageState extends State<SongTrainerPage> {
   bool _isLoading = false;
   bool _isSpeaking = false;
   bool _isAutoMode = false;
+  bool _speechAvailable = false;
+  bool _isListening = false;
+
+  String _recognizedText = '';
+  int? _recognitionScore;
+  String _recognitionFeedback = 'Noch keine Aufnahme ausgewertet.';
   bool _practiceOnlyUnlearned = false;
 
   List<String> _songLines = [];
@@ -102,6 +111,7 @@ class _SongTrainerPageState extends State<SongTrainerPage> {
   void initState() {
     super.initState();
     _configureTts();
+    _initializeSpeechRecognition();
   }
 
   Future<void> _configureTts() async {
@@ -277,6 +287,138 @@ class _SongTrainerPageState extends State<SongTrainerPage> {
     }
   }
 
+
+  Future<void> _initializeSpeechRecognition() async {
+    final bool available = await _speechToText.initialize(
+      onStatus: (status) {
+        if (!mounted) return;
+        if (status == 'done' || status == 'notListening') {
+          setState(() => _isListening = false);
+        }
+      },
+      onError: (error) {
+        if (!mounted) return;
+        setState(() => _isListening = false);
+        _showMessage('Spracherkennung: ${error.errorMsg}');
+      },
+    );
+
+    if (mounted) {
+      setState(() => _speechAvailable = available);
+    }
+  }
+
+  Future<void> _startPronunciationCheck() async {
+    if (_songLines.isEmpty) {
+      _showMessage('Bitte zuerst ein Lied auswählen.');
+      return;
+    }
+    if (!_speechAvailable) {
+      _showMessage('Die Spracherkennung ist auf diesem Gerät nicht verfügbar.');
+      return;
+    }
+
+    await _flutterTts.stop();
+    setState(() {
+      _recognizedText = '';
+      _recognitionScore = null;
+      _recognitionFeedback = 'Ich höre zu …';
+      _isListening = true;
+    });
+
+    await _speechToText.listen(
+      onResult: _onSpeechResult,
+      localeId: _language == 'en-US' ? 'en_US' : 'en_GB',
+      listenFor: const Duration(seconds: 20),
+      pauseFor: const Duration(seconds: 4),
+      partialResults: true,
+      cancelOnError: true,
+      listenMode: ListenMode.confirmation,
+    );
+  }
+
+  void _onSpeechResult(SpeechRecognitionResult result) {
+    if (!mounted) return;
+    setState(() => _recognizedText = result.recognizedWords);
+    if (result.finalResult) {
+      _evaluatePronunciation();
+    }
+  }
+
+  Future<void> _stopPronunciationCheck() async {
+    await _speechToText.stop();
+    if (!mounted) return;
+    setState(() => _isListening = false);
+    _evaluatePronunciation();
+  }
+
+  void _evaluatePronunciation() {
+    final String expected = _normalizeText(_currentLineText);
+    final String spoken = _normalizeText(_recognizedText);
+
+    if (spoken.isEmpty) {
+      setState(() {
+        _recognitionScore = null;
+        _recognitionFeedback = 'Es wurde noch kein verständlicher Text erkannt.';
+      });
+      return;
+    }
+
+    final List<String> expectedWords = expected.split(' ');
+    final List<String> spokenWords = spoken.split(' ');
+    final int distance = _wordDistance(expectedWords, spokenWords);
+    final int longest = expectedWords.length > spokenWords.length
+        ? expectedWords.length
+        : spokenWords.length;
+    final int score = ((1 - distance / longest).clamp(0.0, 1.0) * 100).round();
+
+    String feedback;
+    if (score >= 90) {
+      feedback = 'Sehr gut erkannt!';
+    } else if (score >= 75) {
+      feedback = 'Gut erkannt. Einzelne Wörter bitte noch einmal üben.';
+    } else if (score >= 55) {
+      feedback = 'Teilweise erkannt. Höre die Zeile noch einmal an.';
+    } else {
+      feedback = 'Bitte langsamer und deutlicher noch einmal sprechen.';
+    }
+
+    setState(() {
+      _recognitionScore = score;
+      _recognitionFeedback = feedback;
+    });
+  }
+
+  String _normalizeText(String value) {
+    return value
+        .toLowerCase()
+        .replaceAll(RegExp(r"[^a-z0-9'\\s]"), ' ')
+        .replaceAll(RegExp(r'\\s+'), ' ')
+        .trim();
+  }
+
+  int _wordDistance(List<String> a, List<String> b) {
+    final matrix = List.generate(
+      a.length + 1,
+      (_) => List<int>.filled(b.length + 1, 0),
+    );
+    for (int i = 0; i <= a.length; i++) matrix[i][0] = i;
+    for (int j = 0; j <= b.length; j++) matrix[0][j] = j;
+
+    for (int i = 1; i <= a.length; i++) {
+      for (int j = 1; j <= b.length; j++) {
+        final int cost = a[i - 1] == b[j - 1] ? 0 : 1;
+        final int deletion = matrix[i - 1][j] + 1;
+        final int insertion = matrix[i][j - 1] + 1;
+        final int substitution = matrix[i - 1][j - 1] + cost;
+        matrix[i][j] = [deletion, insertion, substitution].reduce(
+          (x, y) => x < y ? x : y,
+        );
+      }
+    }
+    return matrix[a.length][b.length];
+  }
+
   Future<void> _startAutoLearning() async {
     if (_songLines.isEmpty) {
       _showMessage('Bitte zuerst ein Lied auswählen.');
@@ -374,7 +516,10 @@ class _SongTrainerPageState extends State<SongTrainerPage> {
   void _goToPreviousLine() {
     if (_songLines.isEmpty || _currentLineIndex == 0) return;
 
-    setState(() => _currentLineIndex--);
+    setState(() {
+      _currentLineIndex--;
+      _clearRecognition();
+    });
     _scrollToCurrentLine();
   }
 
@@ -384,12 +529,18 @@ class _SongTrainerPageState extends State<SongTrainerPage> {
       return;
     }
 
-    setState(() => _currentLineIndex++);
+    setState(() {
+      _currentLineIndex++;
+      _clearRecognition();
+    });
     _scrollToCurrentLine();
   }
 
   void _selectLine(int index) {
-    setState(() => _currentLineIndex = index);
+    setState(() {
+      _currentLineIndex = index;
+      _clearRecognition();
+    });
     _scrollToCurrentLine();
   }
 
@@ -403,6 +554,13 @@ class _SongTrainerPageState extends State<SongTrainerPage> {
         _learnedLineIndexes.add(_currentLineIndex);
       }
     });
+  }
+
+
+  void _clearRecognition() {
+    _recognizedText = '';
+    _recognitionScore = null;
+    _recognitionFeedback = 'Noch keine Aufnahme ausgewertet.';
   }
 
   void _scrollToCurrentLine() {
@@ -453,6 +611,7 @@ class _SongTrainerPageState extends State<SongTrainerPage> {
   @override
   void dispose() {
     _flutterTts.stop();
+    _speechToText.stop();
     _textController.dispose();
     _lineScrollController.dispose();
     super.dispose();
@@ -462,7 +621,7 @@ class _SongTrainerPageState extends State<SongTrainerPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('English Song Trainer – Teil 3'),
+        title: const Text('English Song Trainer – Teil 4'),
         centerTitle: true,
         actions: [
           IconButton(
@@ -496,6 +655,8 @@ class _SongTrainerPageState extends State<SongTrainerPage> {
                                 children: [
                                   _buildKaraokePanel(),
                                   const SizedBox(height: 16),
+                                  _buildPronunciationPanel(),
+                                  const SizedBox(height: 16),
                                   _buildProgressPanel(),
                                   const SizedBox(height: 16),
                                   _buildLineListPanel(),
@@ -511,6 +672,8 @@ class _SongTrainerPageState extends State<SongTrainerPage> {
                             _buildControlPanel(),
                             const SizedBox(height: 16),
                             _buildKaraokePanel(),
+                            const SizedBox(height: 16),
+                            _buildPronunciationPanel(),
                             const SizedBox(height: 16),
                             _buildProgressPanel(),
                             const SizedBox(height: 16),
@@ -781,6 +944,90 @@ class _SongTrainerPageState extends State<SongTrainerPage> {
                   ),
                 ),
               ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+
+  Widget _buildPronunciationPanel() {
+    final int score = _recognitionScore ?? 0;
+
+    return Card(
+      elevation: 1,
+      child: Padding(
+        padding: const EdgeInsets.all(18),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                const Icon(Icons.mic_rounded),
+                const SizedBox(width: 8),
+                Text(
+                  'Aussprache prüfen',
+                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.bold,
+                      ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Die App vergleicht die erkannten Wörter mit der aktuellen Liedzeile.',
+            ),
+            const SizedBox(height: 14),
+            FilledButton.icon(
+              onPressed: _songLines.isEmpty || _isSpeaking
+                  ? null
+                  : (_isListening
+                      ? _stopPronunciationCheck
+                      : _startPronunciationCheck),
+              icon: Icon(_isListening ? Icons.stop_circle : Icons.mic),
+              label: Text(
+                _isListening ? 'Aufnahme beenden' : 'Zeile nachsprechen',
+              ),
+            ),
+            const SizedBox(height: 14),
+            Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Erkannter Text:',
+                    style: TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    _recognizedText.isEmpty ? 'Noch nichts erkannt.' : _recognizedText,
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 14),
+            if (_recognitionScore != null) ...[
+              Text(
+                '$score % der Wörter erkannt',
+                textAlign: TextAlign.center,
+                style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                      fontWeight: FontWeight.bold,
+                    ),
+              ),
+              const SizedBox(height: 8),
+              LinearProgressIndicator(value: score / 100),
+              const SizedBox(height: 8),
+            ],
+            Text(
+              _recognitionFeedback,
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontWeight: FontWeight.w600),
             ),
           ],
         ),

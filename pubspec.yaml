@@ -14,6 +14,7 @@ dependencies:
   cupertino_icons: ^1.0.8
   file_picker: ^10.3.2
   flutter_tts: ^4.2.3
+  speech_to_text: ^7.0.0
   syncfusion_flutter_pdf: ^30.1.42
 
 dev_dependencies:
