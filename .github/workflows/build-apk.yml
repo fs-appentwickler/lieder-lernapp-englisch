@@ -1,0 +1,57 @@
+name: Android APK erstellen
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-android-apk:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Projekt herunterladen
+        uses: actions/checkout@v4
+
+      - name: Java 17 einrichten
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Flutter Stable installieren
+        run: |
+          git clone https://github.com/flutter/flutter.git             --depth 1             --branch stable             "$HOME/flutter"
+          echo "$HOME/flutter/bin" >> "$GITHUB_PATH"
+
+      - name: Flutter-Version anzeigen
+        run: flutter --version
+
+      - name: Abhängigkeiten installieren
+        run: flutter pub get
+
+      - name: Release-APK erstellen
+        run: flutter build apk --release
+
+      - name: APK eindeutig benennen
+        run: |
+          mkdir -p release
+          cp build/app/outputs/flutter-apk/app-release.apk             release/english-song-trainer.apk
+
+      - name: APK als Actions-Datei speichern
+        uses: actions/upload-artifact@v4
+        with:
+          name: English-Song-Trainer-APK
+          path: release/english-song-trainer.apk
+          retention-days: 30
+
+      - name: GitHub Release veröffentlichen
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="v1.0.${{ github.run_number }}"
+          gh release create "$TAG"             release/english-song-trainer.apk             --title "English Song Trainer $TAG"             --notes "Automatisch erstellte Android-APK aus dem Branch main."             --target "${{ github.sha }}"
